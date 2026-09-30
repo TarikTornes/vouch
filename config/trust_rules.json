@@ -1,0 +1,11 @@
+{
+  "as_of": "2026-09-30",
+  "source_type_points": {"policy": 3, "client_agreement": 3, "manual": 2, "procedure": 2, "email": 1, "teams_message": 0},
+  "recent_months": 12, "recent_points": 2,
+  "old_months": 24, "old_points": -2,
+  "owner_active_points": 1,
+  "corroboration_points": 1,
+  "confirmed_points": 5,
+  "verified_lead": 4,
+  "stale_after_months": 24
+}
