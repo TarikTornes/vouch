@@ -31,6 +31,7 @@ def headline(kv: KeyVerdict | None, kb: KB) -> str:
 
 def answer(question: str, ctx: Context, kb: KB | None = None, *, use_llm: bool = True, log: bool = False) -> Answer:
     kb = kb or store.load_kb()
+    ctx.validate(kb.vocab)
     question = (question or "").strip()[:MAX_QUESTION]
     p = parse_question(question, use_llm=use_llm)
     primary, related = None, []
@@ -101,6 +102,7 @@ def recorded_rag(question: str, ctx: Context) -> str | None:
 def plain_rag(question: str, ctx: Context, kb: KB | None = None) -> dict:
     """Returns {text, mode: live|recorded|unavailable, sources}."""
     kb = kb or store.load_kb()
+    ctx.validate(kb.vocab)
     question = (question or "").strip()[:MAX_QUESTION]
     docs = retrieve(question, ctx, kb)
     out = llm.text(RAG_SYSTEM, rag_prompt(question, ctx, docs))

@@ -96,6 +96,12 @@ class Context:
     country: str = "BE"
     client: str = "all"
 
+    def validate(self, vocab: dict) -> "Context":
+        """Server-side whitelist: never trust the UI to restrict country/client."""
+        if self.country not in vocab["countries"] or self.client not in vocab["clients"]:
+            raise ValueError("unknown country or client")
+        return self
+
 
 @dataclass
 class Answer:

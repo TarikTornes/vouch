@@ -36,6 +36,7 @@ def candidates(kv: KeyVerdict) -> list[str]:
 
 
 def create_request(question: str, ctx: Context, kv: KeyVerdict, kb: KB) -> dict:
+    ctx.validate(kb.vocab)
     expert = route(kv, kb)
     if expert is None:
         raise ValueError("no active expert available for this topic")

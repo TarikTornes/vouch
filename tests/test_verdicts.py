@@ -142,3 +142,10 @@ def test_real_claims_contain_traps():
                and c["condition"] == "saturday" and c["country"] == "BE" and c["value"] == "yes"}
     assert len(elig_be) == 3
     assert not [c for c in claims if c["condition"] == "public_holiday"]
+
+
+def test_context_whitelisted_server_side(kb):
+    with pytest.raises(ValueError):
+        answer("What is the home-working allowance?", Context("BE", "../../etc"), kb, use_llm=False)
+    with pytest.raises(ValueError):
+        answer("What is the home-working allowance?", Context("FR", "all"), kb, use_llm=False)
