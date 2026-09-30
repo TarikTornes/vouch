@@ -28,3 +28,8 @@ dist-ssr
 data/
 *.sqlite
 *.sqlite-*
+
+# Python leftovers from the other branches in this checkout
+__pycache__/
+*.pyc
+.venv/

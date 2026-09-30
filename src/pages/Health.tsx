@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { countryName } from '../../shared/evidence'
 import { api, type VersionView } from '../api'
-import { Empty, ErrorBox, fmtDate, fmtDateTime, PageHeader, QualityMeter } from '../components/common'
+import type { Freshness } from '../../shared/freshness'
+import { Empty, ErrorBox, fmtDate, fmtDateTime, FreshnessBadge, PageHeader, QualityMeter } from '../components/common'
 
 interface Health {
   openConflicts: { label: string; key: { country: string; client: string }; clientName: string; expert: string | null; values: string[] }[]
   outdatedClaims: { claimId: string; value: string; documentId: string; title: string; duplicateOf: string | null; resolutionId: string; resolvedBy: string; resolvedAt: string }[]
   ownerlessSources: { documentId: string; title: string; updated: string | null }[]
+  staleSources: { documentId: string; title: string; updated: string | null; freshness: Freshness }[]
   staleResolutions: { id: string; value: string; reason: string | null; clientName: string }[]
   documents: VersionView[]
 }
@@ -17,7 +19,7 @@ export function HealthPage() {
   useEffect(() => { api<Health>('/health-report').then(setH).catch((e) => setError(e.message)) }, [])
   return (
     <section>
-      <PageHeader title="Knowledge health" subtitle="Computed from the current database: conflicts, outdated claims, stale approvals, ownership and document checks." />
+      <PageHeader title="Knowledge health" subtitle="Computed from the current database: conflicts, source freshness, outdated claims, stale approvals, ownership and document checks." />
       <ErrorBox error={error} />
       {h && (
         <>
@@ -26,6 +28,14 @@ export function HealthPage() {
             <div className="stat-card static"><span className="stat-icon" aria-hidden="true">⟲</span><span className="stat-value">{h.staleResolutions.length}</span><span className="stat-label">Resolutions needing re-review</span></div>
             <div className="stat-card static"><span className="stat-icon" aria-hidden="true">⊘</span><span className="stat-value">{h.outdatedClaims.length}</span><span className="stat-label">Claims marked outdated</span></div>
             <div className="stat-card static"><span className="stat-icon" aria-hidden="true">∅</span><span className="stat-value">{h.ownerlessSources.length}</span><span className="stat-label">Ownerless sources</span></div>
+            <div className="stat-card static"><span className="stat-icon" aria-hidden="true">🕓</span><span className="stat-value">{h.staleSources.filter((x) => x.freshness.level === 'stale' || x.freshness.level === 'expired').length}</span><span className="stat-label">Sources too old to decide</span></div>
+          </div>
+          <div className="panel">
+            <h2>Freshness: sources due for review or too old</h2>
+            <p className="meta">Current ≤ 12 months · due for review 12–24 months · older than 24 months is shown for context but never decides an answer.</p>
+            {!h.staleSources.length ? <Empty>All sources are current.</Empty> : (
+              <ul className="list plain">{h.staleSources.map((s) => <li key={s.documentId}><FreshnessBadge freshness={s.freshness} /> <a href={`#/documents/${s.documentId}`}>{s.documentId} · {s.title}</a> — updated {fmtDate(s.updated)}</li>)}</ul>
+            )}
           </div>
           <div className="panel">
             <h2>Open conflicts</h2>

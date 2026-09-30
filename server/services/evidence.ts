@@ -1,5 +1,6 @@
 // Loads the knowledge base from SQLite and runs the shared (deterministic) engine.
 import type { Claim, Client, Expert, KnowledgeBase, Resolution, Source, SourceType, Topic } from '../../shared/types'
+import { todayIso } from '../../shared/freshness'
 import { json, type DB } from '../db'
 
 type Row = Record<string, unknown>
@@ -74,7 +75,8 @@ export function loadKB(db: DB): KnowledgeBase {
     country: (r.country as Expert['country']) ?? null,
     ownsTopics: json(r.owns_topics as string, []),
   }))
-  return { sources, claims, clients, experts, resolutions: loadResolutions(db) }
+  // VOUCH_AS_OF pins "today" for reproducible demos; otherwise freshness is measured against the real date.
+  return { sources, claims, clients, experts, resolutions: loadResolutions(db), asOf: process.env.VOUCH_AS_OF || todayIso() }
 }
 
 export function loadResolutions(db: DB, where = '1=1', ...params: (string | number)[]): Resolution[] {

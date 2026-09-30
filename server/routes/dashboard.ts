@@ -45,6 +45,7 @@ export function dashboardRoutes({ db }: Deps) {
         openConflicts: health.openConflicts.length,
         requestsAwaiting: count(`SELECT COUNT(*) n FROM cases WHERE status IN ('open', 'info_requested') AND (assigned_to = ? OR requested_by = ?)`, u.id, u.id),
         staleResolutions: health.staleResolutions.length,
+        oldSources: health.staleSources.filter((x) => x.freshness.level === 'stale' || x.freshness.level === 'expired').length,
       },
       recentUploads,
       recentResolutions: kb.resolutions.slice(0, 5).map((r) => ({
@@ -70,6 +71,7 @@ export function dashboardRoutes({ db }: Deps) {
         duplicateOf: claim.duplicateOf ?? null, resolutionId: resolution.id, resolvedBy: resolution.resolvedByName, resolvedAt: resolution.resolvedAt,
       })),
       ownerlessSources: h.ownerlessSources.map((s) => ({ documentId: s.documentId, title: s.title, updated: s.updated })),
+      staleSources: h.staleSources.map((x) => ({ documentId: x.source.documentId, title: x.source.title, updated: x.source.updated, freshness: x.freshness })),
       staleResolutions: h.staleResolutions.map((r) => ({ id: r.id, value: r.value, reason: r.rereviewReason, clientName: L.clientName(r.key.client) })),
       documents: docs,
     })

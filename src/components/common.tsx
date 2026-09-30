@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { countryName } from '../../shared/evidence'
 import { QUALITY_STOPS, qualityColor, type QualityResult } from '../../shared/quality'
+import type { Freshness, FreshnessLevel } from '../../shared/freshness'
 import type { AnswerStatus, EvidenceItem, EvidenceStatus, Reason, Source } from '../../shared/types'
 import type { EmailStatus } from '../api'
 
@@ -22,6 +23,17 @@ const STATUS_META: Record<AnswerStatus | EvidenceStatus, { icon: string; tone: T
   Excluded: { icon: '⊘', tone: 'muted' },
   'Marked outdated by expert': { icon: '⟲', tone: 'no' },
   Copy: { icon: '⧉', tone: 'info', text: 'Copy — not counted' },
+  'Possibly outdated': { icon: '🕓', tone: 'warn', text: 'Possibly outdated' },
+  'Too old': { icon: '🕓', tone: 'no', text: 'Too old — not used' },
+}
+
+const FRESHNESS_TONE: Record<FreshnessLevel, Tone> = { current: 'ok', aging: 'warn', stale: 'no', expired: 'no', undated: 'muted' }
+
+/** "How old is this evidence" at a glance: green = current, amber = due for review, red = too old to decide. */
+export function FreshnessBadge({ freshness }: { freshness?: Freshness }) {
+  if (!freshness) return null
+  const text = { current: 'Current', aging: 'Due for review', stale: 'Too old', expired: 'Expired', undated: 'Undated' }[freshness.level]
+  return <Badge tone={FRESHNESS_TONE[freshness.level]} icon="🕓">{text} · {freshness.label}</Badge>
 }
 
 export function StatusBadge({ status, text }: { status: AnswerStatus | EvidenceStatus; text?: string }) {
@@ -80,7 +92,7 @@ export const fmtDateTime = (d: string | null | undefined) =>
   d ? new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
 
 export function EvidenceCard({ item, onOpenSource }: { item: EvidenceItem; onOpenSource: (s: Source) => void }) {
-  const { claim, source, status, reasons } = item
+  const { claim, source, status, reasons, freshness } = item
   return (
     <article className={`evidence evidence-${status === 'Applicable' ? 'applicable' : status === 'Copy' ? 'copy' : 'dim'}`}>
       <header className="evidence-head">
@@ -93,6 +105,7 @@ export function EvidenceCard({ item, onOpenSource }: { item: EvidenceItem; onOpe
       </div>
       <div className="meta">
         {countryName(source.country)} · updated {fmtDate(source.updated)} · {source.documentId} v{source.version}
+        {freshness && <><br /><FreshnessBadge freshness={freshness} /></>}
         <br />
         Owner: {source.ownerName ?? <span className="warn-text">No owner</span>}
       </div>

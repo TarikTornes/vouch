@@ -1,19 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { EXAMPLE_QUESTION, fixtureKB, SEED_DOCUMENTS, versionId } from './fixtures'
 import { evaluateIntent, evaluateIntents, findResolution, healthReport } from './evidence'
+import { assessFreshness, monthsBetween } from './freshness'
 import { assessQuality, qualityColor } from './quality'
 import { GENERAL, type Intent, type KnowledgeBase, type Resolution } from './types'
 
 const JANSSENS = { country: 'BE', client: 'janssens' } as const
 const MAES = { country: 'BE', client: 'maes' } as const
 const SAT_SURCHARGE: Intent = { topic: 'overtime_surcharge', condition: 'saturday' }
+const WOUTERS_LIKE = MAES
 
 function withJanssensResolution(kb: KnowledgeBase = fixtureKB()): KnowledgeBase {
   const res: Resolution = {
     id: 'RES-1', caseId: 'CASE-1',
     key: { ...SAT_SURCHARGE, ...JANSSENS },
     value: '50%', acceptedClaimIds: ['C2'], outdatedClaimIds: ['C4'],
-    considered: ['C2', 'C4', 'C5'].map((id) => ({ claimId: id, sourceId: kb.claims.find((c) => c.id === id)!.sourceId, contentHash: 'x' })),
+    considered: ['C2', 'C4', 'C5', 'C9'].map((id) => ({ claimId: id, sourceId: kb.claims.find((c) => c.id === id)!.sourceId, contentHash: 'x' })),
     reason: 'Agreement expired 31 Dec 2025 (fictional).', reference: 'Client file CF-JAN-2025-114 (fictional)',
     resolvedBy: 'anna', resolvedByName: 'Anna Peeters', resolvedAt: '2026-06-15T10:00:00Z', status: 'active',
   }
@@ -143,7 +145,7 @@ describe('fixture integrity', () => {
     const kb = fixtureKB()
     for (const c of kb.claims) expect(kb.sources.find((s) => s.id === c.sourceId)!.text, c.id).toContain(c.excerpt)
   })
-  it('has 6–8 seed documents', () => {
+  it('has 6–9 seed documents', () => {
     expect(SEED_DOCUMENTS.length).toBeGreaterThanOrEqual(6)
     expect(SEED_DOCUMENTS.length).toBeLessThanOrEqual(8)
   })
@@ -173,5 +175,63 @@ describe('document quality checks', () => {
     expect(qualityColor(50)).toBe('#EA580C')
     expect(qualityColor(100)).toBe('#15803D')
     expect(qualityColor(62.5)).not.toBe(qualityColor(50))
+  })
+})
+
+
+describe('freshness: how old the evidence is', () => {
+  const AS_OF = '2026-09-30'
+
+  it('classifies age: current ≤ 12 months, due for review ≤ 24, too old beyond, expired past its end date', () => {
+    expect(monthsBetween('2026-05-12', AS_OF)).toBe(4)
+    expect(assessFreshness('2026-05-12', null, AS_OF).level).toBe('current')
+    expect(assessFreshness('2025-06-01', null, AS_OF).level).toBe('aging')
+    expect(assessFreshness('2023-11-08', null, AS_OF).level).toBe('stale')
+    expect(assessFreshness('2026-05-12', '2026-06-30', AS_OF).level).toBe('expired')
+    expect(assessFreshness(null, null, AS_OF).level).toBe('undated')
+  })
+
+  it('an answer resting only on old evidence is Possibly outdated, not Supported', () => {
+    const r = evaluateIntent({ topic: 'overtime_surcharge', condition: 'sunday' }, JANSSENS, fixtureKB())
+    expect(r.status).toBe('Possibly outdated')
+    expect(r.value).toBe('100%')
+    expect(r.evidence[0].status).toBe('Too old')
+    expect(r.evidence[0].freshness?.level).toBe('stale')
+    expect(r.expert?.id).toBe('anna')
+  })
+
+  it('old evidence is shown but cannot create or decide a conflict', () => {
+    const r = evaluateIntent(SAT_SURCHARGE, WOUTERS_LIKE, fixtureKB())
+    // Maes has its own unverified 45%; the 2022 procedure (35%) is too old and must not join the conflict.
+    expect(r.evidence.find((e) => e.claim.id === 'C9')!.status).toBe('Too old')
+    expect(r.explanation.some((x) => x.text.includes('Set aside as too old: 35%'))).toBe(true)
+    expect(r.explanation[0].text).not.toContain('S8')
+  })
+
+  it('current evidence carries its age in the answer', () => {
+    const r = evaluateIntent({ topic: 'overtime_eligibility', condition: 'saturday' }, JANSSENS, fixtureKB())
+    expect(r.status).toBe('Supported')
+    expect(r.evidence.every((e) => e.freshness?.level === 'current')).toBe(true)
+    expect(r.explanation.some((x) => x.text.startsWith('Newest supporting source is current'))).toBe(true)
+  })
+
+  it('the expert answer becomes a verified, reusable source', () => {
+    const r = evaluateIntent(SAT_SURCHARGE, JANSSENS, withJanssensResolution())
+    expect(r.explanation[0].text).toMatch(/expert’s answer is now a verified source/)
+    expect(r.explanation[0].text).toMatch(/reused as proof for every similar question/)
+  })
+
+  it('an expert answer older than the stale limit must be re-confirmed', () => {
+    const kb = withJanssensResolution()
+    kb.resolutions[0].resolvedAt = '2024-01-10T09:00:00Z'
+    const r = evaluateIntent(SAT_SURCHARGE, JANSSENS, kb)
+    expect(r.expertConfirmed).toBeUndefined()
+    expect(r.status).toBe('Conflicting')
+    expect(r.explanation.some((x) => x.text.includes('must be re-confirmed'))).toBe(true)
+  })
+
+  it('knowledge health lists sources that are due for review or too old', () => {
+    const stale = healthReport(fixtureKB()).staleSources.map((x) => [x.source.documentId, x.freshness.level])
+    expect(stale).toEqual([['S8', 'stale'], ['S6', 'stale']])
   })
 })

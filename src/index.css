@@ -181,6 +181,7 @@ a.stat-card:hover { border-color: var(--brand-primary); box-shadow: 0 4px 14px r
 .claim-supported, .claim-confirmed { border-left-color: var(--ok); }
 .claim-conflicting { border-left-color: #c2410c; }
 .claim-unsupported { border-left-color: var(--line-bold); }
+.claim-possibly-outdated { border-left-color: #ca8a04; }
 .claim-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .claim-label { color: var(--text-soft); font-size: 0.88rem; }
 .reasons { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 4px; }

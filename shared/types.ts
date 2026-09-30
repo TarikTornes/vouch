@@ -1,4 +1,5 @@
 // Shared domain types for Vouch (server + browser). All demo data is synthetic.
+import type { Freshness } from './freshness'
 
 export type Country = 'BE' | 'NL'
 export type ClaimCountry = Country | 'unknown'
@@ -112,10 +113,11 @@ export interface KnowledgeBase {
   experts: Expert[]
   clients: Client[]
   resolutions: Resolution[]
+  asOf: string // ISO date that "how old is this evidence" is measured against
 }
 
-export type AnswerStatus = 'Supported' | 'Conflicting' | 'Unsupported'
-export type EvidenceStatus = 'Applicable' | 'Excluded' | 'Marked outdated by expert' | 'Copy'
+export type AnswerStatus = 'Supported' | 'Conflicting' | 'Possibly outdated' | 'Unsupported'
+export type EvidenceStatus = 'Applicable' | 'Excluded' | 'Marked outdated by expert' | 'Copy' | 'Too old'
 
 export interface Reason {
   kind: 'ok' | 'no' | 'warn' | 'info'
@@ -127,6 +129,7 @@ export interface EvidenceItem {
   source: Source
   status: EvidenceStatus
   reasons: Reason[]
+  freshness?: Freshness // set for claims in scope (country and client match)
 }
 
 export interface ClaimResult {

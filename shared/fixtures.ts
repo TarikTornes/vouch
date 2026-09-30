@@ -110,6 +110,19 @@ export const SEED_DOCUMENTS: SeedDocument[] = [
     client: 'maes',
     link: 'demo://mail/maes-onboarding',
   },
+  {
+    id: 'S8',
+    title: 'BE Payroll Procedure — Weekend work (2022 edition)',
+    type: 'Manual',
+    text:
+      'Procedure 7.1 — Saturday overtime is compensated with a 35% surcharge on the hourly wage. ' +
+      'Procedure 7.2 — Register weekend hours in the time sheet before the monthly cut-off.',
+    updated: '2022-03-01',
+    ownerName: 'Marc Dubois',
+    country: 'BE',
+    client: GENERAL,
+    link: 'demo://sharepoint/archive/be-weekend-procedure-2022',
+  },
 ]
 
 /** Seed claims: hand-written for the synthetic seed documents (uploaded documents are extracted live by Claude). */
@@ -158,8 +171,16 @@ export const CLAIMS: Claim[] = [
     excerpt: 'Maes mentioned a sector arrangement that sets Saturday overtime at 45%.',
     exception: { label: 'Maes sector arrangement', documentedBy: null },
   },
+  {
+    id: 'C9', sourceId: 'S8-v1', country: 'BE', client: GENERAL,
+    topic: 'overtime_surcharge', condition: 'saturday', value: '35%',
+    excerpt: 'Saturday overtime is compensated with a 35% surcharge on the hourly wage.',
+  },
 ]
 
+
+/** Fixed 'today' for the tests, so freshness results never drift with the calendar. */
+export const FIXTURE_AS_OF = '2026-09-30'
 
 export const versionId = (docId: string, version = 1) => `${docId}-v${version}`
 
@@ -178,5 +199,6 @@ export function fixtureKB(): KnowledgeBase {
       { id: 'jan', name: 'Jan Visser', role: 'Payroll policy owner — Netherlands', country: 'NL', ownsTopics: ['overtime_eligibility', 'overtime_surcharge'] },
     ],
     resolutions: [],
+    asOf: FIXTURE_AS_OF,
   }
 }

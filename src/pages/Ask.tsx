@@ -109,7 +109,7 @@ export function AskPage({ meta, last, setLast, me, onChanged }: { meta: Meta | n
             const k = keyId(r)
             const c = cases[k]
             return (
-              <div key={k} className={`claim claim-${r.expertConfirmed ? 'confirmed' : r.status.toLowerCase()}`}>
+              <div key={k} className={`claim claim-${r.expertConfirmed ? 'confirmed' : r.status.toLowerCase().replace(' ', '-')}`}>
                 <div className="claim-head">
                   <AnswerBadge status={r.status} expertConfirmed={r.expertConfirmed} />
                   <span className="claim-label">{r.label}</span>
@@ -118,11 +118,11 @@ export function AskPage({ meta, last, setLast, me, onChanged }: { meta: Meta | n
                 <ReasonList reasons={r.explanation} />
                 {r.resolution && (
                   <div className="provenance">
-                    <strong>Provenance:</strong> {r.resolution.id} by {r.resolution.resolvedByName}, {new Date(r.resolution.resolvedAt).toLocaleString('en-GB')} · scope {r.key.condition} {r.key.topic.replace('overtime_', '')} for this client only ·{' '}
+                    <strong>Expert answer, stored as a source:</strong> {r.resolution.id} by {r.resolution.resolvedByName}, {new Date(r.resolution.resolvedAt).toLocaleString('en-GB')} · scope {r.key.condition} {r.key.topic.replace('overtime_', '')} for this client only ·{' '}
                     <a href={`#/cases/${r.resolution.caseId}`}>view case {r.resolution.caseId}</a> · evidence considered: {r.resolution.considered.map((x) => `${x.claimId} (${x.sourceId})`).join(', ')}
                   </div>
                 )}
-                {(r.status === 'Conflicting' || r.status === 'Unsupported') && me.role === 'consultant' && (
+                {(r.status === 'Conflicting' || r.status === 'Unsupported' || r.status === 'Possibly outdated') && me.role === 'consultant' && (
                   <div className="review-action">
                     {c ? (
                       <div className="case-created">

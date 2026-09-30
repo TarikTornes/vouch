@@ -57,7 +57,16 @@ Demo accounts are `sophie` (consultant), `anna` (Belgian overtime expert) and `j
   - An undocumented client exception keeps a conflict open.
   - Copies are not counted as corroboration.
   - Age and ownership do not decide correctness.
-- **Scoped resolutions**:
+- **Freshness — how old the evidence is** (`shared/freshness.ts`), measured against today (or `VOUCH_AS_OF`):
+  - Current: updated within 12 months. Due for review: 12–24 months (still used, with a warning). Too old: more than 24 months, or past its `effective_to` date.
+  - Too-old evidence is shown with its age but **never decides an answer and cannot create a conflict**. When it is the only evidence, the answer is 🕓 **Possibly outdated** and routed to the owner instead of being presented as fact.
+  - Every evidence card shows a freshness badge; supported answers state the age of their newest source; Knowledge health and the dashboard list sources that are due for review or too old.
+  - Expert answers age too: a resolution older than 24 months must be re-confirmed before it is applied again.
+- **The expert's answer becomes a source**:
+  - When sources conflict, the expert picks the correct value from the current evidence.
+  - When there is no current evidence (only outdated sources, or none), the expert answers from their own expertise, backed by a recorded statement or a linked document. That answer is stored as a verified source.
+  - Any later question with the same meaning (same topic, condition, country and client), however it is worded, is answered from it and shows who confirmed it, when, and why.
+
   - A resolution applies only to its exact topic, condition, country and client, and only while it is active.
   - It never applies over evidence it did not consider. If a document gets a new version or new relevant evidence appears, the resolution goes to *needs re-review* and a re-review case opens automatically.
 - **Document lifecycle**:

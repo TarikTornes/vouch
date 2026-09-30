@@ -76,7 +76,7 @@ export function createCaseFromQuestion(db: DB, config: Config, user: User, quest
   const ctx = { country: q.country as 'BE' | 'NL', client: q.client as string }
   const kb = loadKB(db)
   const result = evaluateIntent({ topic, condition }, ctx, kb)
-  if (result.status !== 'Conflicting' && result.status !== 'Unsupported') {
+  if (result.status !== 'Conflicting' && result.status !== 'Unsupported' && result.status !== 'Possibly outdated') {
     throw new UserError(`This claim is currently ${result.expertConfirmed ? 'expert-confirmed' : result.status}; no expert review is needed.`, 409)
   }
   const key = { ...ctx, topic, condition }
@@ -137,9 +137,20 @@ export function resolveCase(db: DB, user: User, caseId: string, input: ResolveIn
     const kb = loadKB(db)
     const inScope = inScopeClaims(key, kb)
     const independent = inScope.filter((e) => e.status === 'Applicable')
+    const tooOld = inScope.filter((e) => e.status === 'Too old')
     const values = [...new Set(independent.map((e) => e.claim.value))]
-    if (!values.includes(input.value)) throw new UserError(`The resolved value must be one of the values in the current evidence (${values.join(', ') || 'none'}).`)
-    const others = independent.filter((e) => e.claim.value !== input.value).map((e) => e.claim.id)
+    const value = input.value?.trim() ?? ''
+    if (values.length) {
+      // Current evidence exists: the expert picks one of its values.
+      if (!values.includes(value)) throw new UserError(`The resolved value must be one of the values in the current evidence (${values.join(', ')}).`)
+    } else {
+      // No current evidence (only outdated sources, or none at all): the expert's own answer becomes the source.
+      if (!input.expertStatement?.trim() && !input.supportingDocumentId) throw new UserError('Without current evidence, record an expert statement or link a supporting document.')
+      const ok = key.topic === 'overtime_surcharge' ? /^\d{1,3}(\.\d{1,2})?%$/.test(value) : value === 'qualifies' || value === 'does not qualify'
+      if (!ok) throw new UserError(key.topic === 'overtime_surcharge' ? 'Enter the surcharge as a percentage, e.g. 100%.' : 'Enter “qualifies” or “does not qualify”.')
+    }
+    input = { ...input, value }
+    const others = [...independent, ...tooOld].filter((e) => e.claim.value !== input.value).map((e) => e.claim.id)
     const badOutdated = input.outdatedClaimIds.filter((id) => !others.includes(id))
     if (badOutdated.length) throw new UserError(`Only claims with a different value can be marked outdated (${badOutdated.join(', ')} cannot).`)
     let supportingVersionId: string | null = null
@@ -158,7 +169,7 @@ export function resolveCase(db: DB, user: User, caseId: string, input: ResolveIn
     db.prepare(`INSERT INTO resolutions (id, case_id, topic, condition, country, client, value, accepted_claim_ids, outdated_claim_ids, considered, reason,
         supporting_version_id, expert_statement, resolved_by, resolved_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`)
       .run(resId, caseId, key.topic, key.condition, key.country, key.client, input.value,
-        JSON.stringify(independent.filter((e) => e.claim.value === input.value).map((e) => e.claim.id)),
+        JSON.stringify([...independent, ...tooOld].filter((e) => e.claim.value === input.value).map((e) => e.claim.id)),
         JSON.stringify(input.outdatedClaimIds),
         JSON.stringify(inScope.map((e) => ({ claimId: e.claim.id, sourceId: e.source.id, contentHash: e.source.contentHash }))),
         input.reason.trim(), supportingVersionId, input.expertStatement?.trim() || null, user.id, now)

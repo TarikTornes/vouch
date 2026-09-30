@@ -112,7 +112,7 @@ export function CaseDetailPage({ id, me, tick, onChanged }: { id: string; me: Me
       </div>
 
       <ErrorBox error={actionError} />
-      {isExpert && openForAction && <ExpertActions c={c} run={run} />}
+      {isExpert && openForAction && <ExpertActions key={`${c.id}-${c.rowVersion}`} c={c} run={run} />}
       {!isExpert && me.role === 'expert' && openForAction && <p className="notice">Only the assigned expert ({c.assignedTo}) can act on this case.</p>}
       {isRequester && c.status === 'info_requested' && <ReplyForm c={c} run={run} />}
       {modal}
@@ -124,24 +124,27 @@ const eventLabel = (k: string) => ({ created: 'Case created', rereview_opened: '
 
 function ExpertActions({ c, run }: { c: CaseDetail; run: (fn: () => Promise<unknown>) => Promise<void> }) {
   const applicable = c.current.evidence.filter((e) => e.status === 'Applicable')
+  const tooOld = c.current.evidence.filter((e) => e.status === 'Too old')
   const values = [...new Set(applicable.map((e) => e.claim.value))]
-  const [value, setValue] = useState(values[0] ?? '')
+  // No current evidence: the expert answers from their own knowledge, and that answer becomes the source.
+  const ownAnswer = values.length === 0
+  const [value, setValue] = useState(values[0] ?? tooOld[0]?.claim.value ?? '')
   const [outdated, setOutdated] = useState<Record<string, boolean>>({})
   const [reason, setReason] = useState('')
-  const [supportMode, setSupportMode] = useState<'document' | 'statement'>('document')
+  const [supportMode, setSupportMode] = useState<'document' | 'statement'>(ownAnswer ? 'statement' : 'document')
   const [supportDoc, setSupportDoc] = useState('')
   const [statement, setStatement] = useState('')
   const [infoMsg, setInfoMsg] = useState('')
   const [unresolvedReason, setUnresolvedReason] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
-  const others = applicable.filter((e) => e.claim.value !== value)
+  const others = [...applicable, ...tooOld].filter((e) => e.claim.value !== value)
   const isOutdated = (id: string) => outdated[id] ?? true
 
   return (
     <div className="panel">
       <h2>Expert decision</h2>
       <p className="meta">Signed in as the assigned expert. Your identity and the timestamp are recorded by the server.</p>
-      {values.length ? (
+      {(
         <form className="resolution-form" onSubmit={(e) => {
           e.preventDefault()
           setFormError(null)
@@ -153,19 +156,29 @@ function ExpertActions({ c, run }: { c: CaseDetail; run: (fn: () => Promise<unkn
             supportingDocumentId: supportMode === 'document' ? supportDoc : null, expertStatement: supportMode === 'statement' ? statement : null,
           } }))
         }}>
-          <h3>Resolve with a supported answer</h3>
-          <label>Correct value for {c.clientName}
-            <select value={value} onChange={(e) => setValue(e.target.value)}>
-              {values.map((v) => <option key={v} value={v}>{v} (from {applicable.filter((e) => e.claim.value === v).map((e) => e.source.documentId).join(', ')})</option>)}
-            </select>
-          </label>
+          <h3>{ownAnswer ? 'Answer from your expertise' : 'Resolve with a supported answer'}</h3>
+          {ownAnswer ? (
+            <>
+              <p className="notice">No current source covers this{tooOld.length ? ` — the only evidence is too old: ${tooOld.map((e) => `${e.claim.value} from “${e.source.title}”, ${e.freshness?.label}`).join('; ')}` : ''}. Your answer and statement are stored as a verified source and reused for similar questions.</p>
+              <label>Correct value for {c.clientName}
+                <input value={value} onChange={(e) => setValue(e.target.value)} aria-label="Correct value"
+                  placeholder={c.key.topic === 'overtime_surcharge' ? 'e.g. 100%' : 'qualifies / does not qualify'} maxLength={20} />
+              </label>
+            </>
+          ) : (
+            <label>Correct value for {c.clientName}
+              <select value={value} onChange={(e) => setValue(e.target.value)}>
+                {values.map((v) => <option key={v} value={v}>{v} (from {applicable.filter((e) => e.claim.value === v).map((e) => e.source.documentId).join(', ')})</option>)}
+              </select>
+            </label>
+          )}
           {others.length > 0 && (
             <fieldset>
               <legend>Mark as outdated (the original evidence is kept)</legend>
               {others.map((o) => (
                 <label key={o.claim.id} className="check">
                   <input type="checkbox" checked={isOutdated(o.claim.id)} onChange={(e) => setOutdated({ ...outdated, [o.claim.id]: e.target.checked })} />
-                  {o.claim.id} — {o.claim.value} from {o.source.title} ({o.source.documentId} v{o.source.version})
+                  {o.claim.id} — {o.claim.value} from {o.source.title} ({o.source.documentId} v{o.source.version}){o.status === 'Too old' ? ` · ${o.freshness?.label}` : ''}
                 </label>
               ))}
             </fieldset>
@@ -186,7 +199,7 @@ function ExpertActions({ c, run }: { c: CaseDetail; run: (fn: () => Promise<unkn
           <ErrorBox error={formError} />
           <button type="submit" className="btn btn-primary">Save resolution</button>
         </form>
-      ) : <p className="notice">No applicable values to choose from — request more information or leave the case unresolved.</p>}
+      )}
 
       <div className="two-col">
         {c.status === 'open' && (

@@ -6,6 +6,9 @@ import {
   type Answer, type Claim, type ClaimKey, type ClaimResult, type Context, type EvidenceItem,
   type Expert, type Intent, type KnowledgeBase, type Reason, type Resolution, type Source,
 } from './types'
+import { FRESHNESS_RULES, assessFreshness, isTooOld, monthsBetween } from './freshness'
+
+const confirmedAgo = (m: number) => (m < 1 ? 'this month' : `${m} month${m === 1 ? '' : 's'} ago`)
 
 export const COUNTRY_NAMES: Record<string, string> = { BE: 'Belgium', NL: 'Netherlands', unknown: 'Unknown country' }
 export const countryName = (id: string) => COUNTRY_NAMES[id] ?? id
@@ -44,7 +47,7 @@ export function routeExpert(key: ClaimKey, experts: Expert[]): Expert | undefine
 
 type Lookups = ReturnType<typeof makeLookups>
 
-function assessClaim(claim: Claim, ctx: Context, resolution: Resolution | undefined, L: Lookups): EvidenceItem {
+function assessClaim(claim: Claim, ctx: Context, resolution: Resolution | undefined, L: Lookups, asOf: string): EvidenceItem {
   const source = L.sourceById(claim.sourceId)
   const reasons: Reason[] = []
   let status: EvidenceItem['status'] = 'Applicable'
@@ -69,6 +72,14 @@ function assessClaim(claim: Claim, ctx: Context, resolution: Resolution | undefi
       status = 'Excluded'
       reasons.push({ kind: 'no', text: `Different client (${L.clientName(claim.client)})` })
     }
+  }
+
+  // 2. Freshness: in-scope evidence past the stale limit (or expired) is shown but never decides the answer.
+  let freshness: EvidenceItem['freshness']
+  if (status !== 'Excluded') {
+    freshness = assessFreshness(source.updated, claim.effectiveTo, asOf)
+    reasons.push(freshness.reason)
+    if (isTooOld(freshness)) status = 'Too old'
   }
 
   if (claim.exception) {
@@ -96,7 +107,7 @@ function assessClaim(claim: Claim, ctx: Context, resolution: Resolution | undefi
     reasons.push({ kind: 'info', text: `Repeats ${claim.duplicateOf}${orig ? ` (${orig.sourceId})` : ''} — not independent corroboration` })
   }
 
-  return { claim, source, status, reasons }
+  return { claim, source, status, reasons, freshness }
 }
 
 function supportedHeadline(key: ClaimKey, value: string, applicable: Claim[]): string {
@@ -111,14 +122,14 @@ function supportedHeadline(key: ClaimKey, value: string, applicable: Claim[]): s
 }
 
 const uniq = <T,>(xs: T[]) => [...new Set(xs)]
-const ORDER = ['Applicable', 'Copy', 'Marked outdated by expert', 'Excluded']
+const ORDER = ['Applicable', 'Copy', 'Too old', 'Marked outdated by expert', 'Excluded']
 
 /** Claims that are in scope for a key (not excluded), ignoring any resolution. */
 export function inScopeClaims(key: ClaimKey, kb: KnowledgeBase): EvidenceItem[] {
   const L = makeLookups(kb)
   return kb.claims
     .filter((c) => c.topic === key.topic && c.condition === key.condition)
-    .map((c) => assessClaim(c, key, undefined, L))
+    .map((c) => assessClaim(c, key, undefined, L, kb.asOf))
     .filter((e) => e.status !== 'Excluded')
 }
 
@@ -126,13 +137,15 @@ export function inScopeClaims(key: ClaimKey, kb: KnowledgeBase): EvidenceItem[] 
  * A resolution applies only to its exact key, only while active, and only if it
  * considered every claim that is currently in scope. It cannot override evidence it never saw.
  */
-export function findResolution(key: ClaimKey, kb: KnowledgeBase): { active?: Resolution; stale?: Resolution; unseen: string[] } {
+export function findResolution(key: ClaimKey, kb: KnowledgeBase): { active?: Resolution; stale?: Resolution; unseen: string[]; expired?: boolean } {
   const r = kb.resolutions.find((x) => keyEquals(x.key, key) && x.status !== 'superseded')
   if (!r) return { unseen: [] }
   const considered = new Set(r.considered.map((c) => c.claimId))
   const unseen = inScopeClaims(key, kb).map((e) => e.claim.id).filter((id) => !considered.has(id))
-  if (r.status === 'active' && unseen.length === 0) return { active: r, unseen }
-  return { stale: r, unseen }
+  // An expert answer is a source too, so it ages like one: past the stale limit it must be re-confirmed.
+  const expired = monthsBetween(r.resolvedAt, kb.asOf) > FRESHNESS_RULES.staleMonths
+  if (r.status === 'active' && unseen.length === 0 && !expired) return { active: r, unseen }
+  return { stale: r, unseen, expired }
 }
 
 export function evaluateIntent(intent: Intent, ctx: Context, kb: KnowledgeBase): ClaimResult {
@@ -141,17 +154,20 @@ export function evaluateIntent(intent: Intent, ctx: Context, kb: KnowledgeBase):
   const label = intentLabel(intent)
   // Compare only claims whose topic and condition match.
   const candidates = kb.claims.filter((c) => c.topic === intent.topic && c.condition === intent.condition)
-  const { active: resolution, stale, unseen } = findResolution(key, kb)
+  const { active: resolution, stale, unseen, expired } = findResolution(key, kb)
   const evidence = candidates
-    .map((c) => assessClaim(c, ctx, resolution, L))
+    .map((c) => assessClaim(c, ctx, resolution, L, kb.asOf))
     .sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status))
   const independent = evidence.filter((e) => e.status === 'Applicable')
   const copies = evidence.filter((e) => e.status === 'Copy')
+  const tooOld = evidence.filter((e) => e.status === 'Too old')
   const base = { key, label, evidence }
   const staleNote: Reason[] = stale
     ? [{
         kind: 'warn',
-        text: stale.status === 'needs_rereview'
+        text: expired
+          ? `Expert answer ${stale.id} (${stale.value}, ${stale.resolvedAt.slice(0, 10)}) is older than ${FRESHNESS_RULES.staleMonths} months and must be re-confirmed. It is not applied.`
+          : stale.status === 'needs_rereview'
           ? `Earlier resolution ${stale.id} is awaiting re-review${stale.rereviewReason ? `: ${stale.rereviewReason}` : ''}. It is not applied.`
           : `Earlier resolution ${stale.id} did not consider ${unseen.join(', ')}. It is not applied until an expert re-reviews it.`,
       }]
@@ -171,7 +187,33 @@ export function evaluateIntent(intent: Intent, ctx: Context, kb: KnowledgeBase):
       }),
     ]
     const resolver = kb.experts.find((e) => e.id === resolution.resolvedBy)
+    explanation.unshift({
+      kind: 'ok',
+      text: `The expert’s answer is now a verified source: it is reused as proof for every similar question (${label}, ${L.clientName(key.client)}). Confirmed ${confirmedAgo(monthsBetween(resolution.resolvedAt, kb.asOf))}, so it counts as current evidence.`,
+    })
     return { ...base, status: 'Supported', expertConfirmed: true, value: resolution.value, headline: `${resolution.value} — expert-confirmed`, explanation, resolution, expert: resolver }
+  }
+
+  const tooOldNote: Reason[] = tooOld.map((e) => ({
+    kind: 'info',
+    text: `Set aside as too old: ${e.claim.value} from “${e.source.title}”, ${e.freshness?.label} — shown for context, not used to decide.`,
+  }))
+
+  if (independent.length === 0 && tooOld.length) {
+    // Only old evidence: surface it with its age instead of presenting it as a current answer.
+    const newest = [...tooOld].sort((a, b) => (b.source.updated ?? '').localeCompare(a.source.updated ?? ''))[0]
+    const expert = routeExpert(key, kb.experts)
+    return {
+      ...base, status: 'Possibly outdated', value: newest.claim.value, staleResolution: stale,
+      headline: `The only evidence is outdated: ${newest.claim.value}, from a source that is ${newest.freshness?.label}. Verify before using.`,
+      explanation: [
+        { kind: 'warn', text: `Every applicable source is older than ${FRESHNESS_RULES.staleMonths} months or expired — no current source confirms this value.` },
+        ...tooOld.map((e): Reason => ({ kind: 'no', text: `${e.claim.value} — “${e.source.title}”, ${e.freshness?.label}${e.source.ownerName ? `, owner ${e.source.ownerName}` : ', no owner'}.` })),
+        ...staleNote,
+        ...(expert ? [{ kind: 'info' as const, text: `Can confirm or update it: ${expert.name}, ${expert.role}.` }] : []),
+      ],
+      expert,
+    }
   }
 
   if (independent.length === 0) {
@@ -193,6 +235,15 @@ export function evaluateIntent(intent: Intent, ctx: Context, kb: KnowledgeBase):
     ? [{ kind: 'info', text: `${copies.length} repeated ${copies.length === 1 ? 'copy' : 'copies'} ignored — repetition is not independent corroboration.` }]
     : []
 
+  const newestSupport = (items: EvidenceItem[]): Reason[] => {
+    const dated = items.filter((e) => e.freshness?.ageMonths != null).sort((a, b) => a.freshness!.ageMonths! - b.freshness!.ageMonths!)
+    if (!dated.length) return []
+    const f = dated[0].freshness!
+    return [f.level === 'aging'
+      ? { kind: 'warn', text: `Newest supporting source is ${f.label} — due for review.` }
+      : { kind: 'ok', text: `Newest supporting source is current (${f.label}).` }]
+  }
+
   if (values.length === 1) {
     const unverified = independent.filter((e) => e.claim.exception && !e.claim.exception.documentedBy)
     return {
@@ -200,7 +251,9 @@ export function evaluateIntent(intent: Intent, ctx: Context, kb: KnowledgeBase):
       headline: supportedHeadline(key, values[0], independent.map((e) => e.claim)),
       explanation: [
         { kind: 'ok', text: independent.length === 1 ? '1 applicable source; no other applicable source disagrees.' : `${independent.length} independent applicable sources agree.` },
+        ...newestSupport(independent),
         ...copyNote,
+        ...tooOldNote,
         ...unverified.map((e): Reason => ({ kind: 'warn', text: `Rests on an unverified client exception (${e.claim.exception!.label}).` })),
         ...(independent.length === 1 && !independent[0].source.ownerName
           ? [{ kind: 'warn' as const, text: 'Single source with no owner — nobody is accountable for keeping it current.' }]
@@ -219,7 +272,9 @@ export function evaluateIntent(intent: Intent, ctx: Context, kb: KnowledgeBase):
       headline: supportedHeadline(key, csValues[0], clientSpecific.map((e) => e.claim)),
       explanation: [
         { kind: 'ok', text: `Documented client exception overrides the general rule (${clientSpecific[0].claim.exception!.documentedBy}).` },
+        ...newestSupport(clientSpecific),
         ...copyNote,
+        ...tooOldNote,
         ...staleNote,
       ],
     }
@@ -235,8 +290,9 @@ export function evaluateIntent(intent: Intent, ctx: Context, kb: KnowledgeBase):
         .filter((e) => e.claim.exception && !e.claim.exception.documentedBy)
         .map((e): Reason => ({ kind: 'warn', text: `Client exception unverified: ${e.source.documentId} mentions “${e.claim.exception!.label}” without supplying it.` })),
       ...copyNote,
+      ...tooOldNote,
       ...staleNote,
-      { kind: 'info', text: 'A newer date or an active owner does not settle which value is correct — an expert must decide.' },
+      { kind: 'info', text: 'Both values come from current sources, so age cannot settle it — an expert must decide.' },
       ...(expert ? [{ kind: 'info' as const, text: `Can resolve: ${expert.name}, ${expert.role}.` }] : []),
     ],
     expert,
@@ -265,6 +321,7 @@ export function evaluateIntents(question: string, intents: Intent[], ctx: Contex
 
 export interface HealthReport {
   openConflicts: ClaimResult[]
+  staleSources: { source: Source; freshness: ReturnType<typeof assessFreshness> }[]
   outdatedClaims: { claim: Claim; resolution: Resolution }[]
   ownerlessSources: Source[]
   staleResolutions: Resolution[]
@@ -283,8 +340,13 @@ export function healthReport(kb: KnowledgeBase): HealthReport {
     kb.claims.filter((c) => r.outdatedClaimIds.includes(c.id) || (c.duplicateOf && r.outdatedClaimIds.includes(c.duplicateOf)))
       .map((claim) => ({ claim, resolution: r })),
   )
+  const staleSources = kb.sources
+    .map((source) => ({ source, freshness: assessFreshness(source.updated, null, kb.asOf) }))
+    .filter((x) => x.freshness.level !== 'current')
+    .sort((a, b) => (b.freshness.ageMonths ?? 999) - (a.freshness.ageMonths ?? 999))
   return {
     openConflicts,
+    staleSources,
     outdatedClaims,
     ownerlessSources: kb.sources.filter((s) => !s.ownerName),
     staleResolutions: kb.resolutions.filter((r) => r.status === 'needs_rereview'),

@@ -57,6 +57,7 @@ async function login(app: ReturnType<typeof makeApp>, username: string, password
 const memo = 'Janssens NV — HR memo (fictional). From 1 July 2026, Saturday overtime for Janssens NV staff in Belgium is paid with a 60% surcharge under agreement JA-2026-02.'
 
 beforeEach(() => {
+  process.env.VOUCH_AS_OF = '2026-09-30'          // freshness is measured against a fixed date in tests
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vouch-test-'))
   dbFile = path.join(dir, 'test.sqlite')
   config = { ...loadConfig({ APP_BASE_URL: ORIGIN } as NodeJS.ProcessEnv), databasePath: dbFile, demoExpertEmail: 'expert-inbox@example.test', resendApiKey: 'test-key-not-real', passwords: PW }
@@ -279,7 +280,7 @@ describe('persistence', () => {
     const s2 = await login(app2, 'sophie', PW.consultant)
     const again = await askSaturday(s2)
     expect(again.answer.claims[1].expertConfirmed).toBe(true)
-    expect((await s2.get('/api/documents')).body.documents.length).toBe(7)
+    expect((await s2.get('/api/documents')).body.documents.length).toBe(8)
   })
 })
 
@@ -324,5 +325,37 @@ describe('zero-cost mode: no LLM connected and no email provider', () => {
     expect((await anna.post(`/api/cases/${created.body.caseId}/resolve`, { rowVersion: 1, value: '50%', reason: 'Sector arrangement not applicable (fictional)', expertStatement: 'Checked with policy owner records (fictional)', outdatedClaimIds: [] })).status).toBe(200)
     const sn = await sophie.get('/api/notifications')
     expect(sn.body.notifications[0].kind).toBe('resolved')
+  })
+
+  it('an outdated-only answer goes to the expert, whose own statement becomes the source for similar questions', async () => {
+    config = { ...config, resendApiKey: null }
+    const app = createApp({ db, config, llm: null, sendEmail: fakeSender })
+    const sophie = await login(app, 'sophie', PW.consultant)
+    const anna = await login(app, 'anna', PW.expert)
+
+    const q = await sophie.post('/api/questions', { question: 'What surcharge applies to Sunday overtime?', country: 'BE', client: 'janssens' })
+    const sun = q.body.answer.claims.find((c: { key: { topic: string } }) => c.key.topic === 'overtime_surcharge')
+    expect(sun.status).toBe('Possibly outdated')
+    const created = await sophie.post('/api/cases', { questionId: q.body.id, topic: 'overtime_surcharge', condition: 'sunday' })
+    expect(created.status).toBe(201)
+    const caseId = created.body.caseId
+
+    const noProof = await anna.post(`/api/cases/${caseId}/resolve`, { rowVersion: 1, value: '100%', reason: 'x', outdatedClaimIds: [], supportingDocumentId: null, expertStatement: '' })
+    expect(noProof.status).toBe(400)
+    const badValue = await anna.post(`/api/cases/${caseId}/resolve`, { rowVersion: 1, value: 'a lot', reason: 'x', outdatedClaimIds: [], expertStatement: 'Checked (fictional)' })
+    expect(badValue.status).toBe(400)
+    const ok = await anna.post(`/api/cases/${caseId}/resolve`, { rowVersion: 1, value: '100%', reason: 'Re-checked against the current sector agreement (fictional).', outdatedClaimIds: [], expertStatement: 'Sunday overtime remains 100% for BE clients without their own agreement (fictional).' })
+    expect(ok.status).toBe(200)
+
+    // A differently worded question on the same topic reuses the expert answer as its proof.
+    const again = await sophie.post('/api/questions', { question: 'How much extra do we pay for working Sundays?', country: 'BE', client: 'janssens' })
+    const r = again.body.answer.claims.find((c: { key: { topic: string } }) => c.key.topic === 'overtime_surcharge')
+    expect(r.status).toBe('Supported')
+    expect(r.expertConfirmed).toBe(true)
+    expect(r.value).toBe('100%')
+    expect(r.explanation[0].text).toMatch(/verified source/)
+    // Scoped: another client is not affected.
+    const maes = await sophie.post('/api/questions', { question: 'How much extra do we pay for working Sundays?', country: 'BE', client: 'maes' })
+    expect(maes.body.answer.claims.find((c: { key: { topic: string } }) => c.key.topic === 'overtime_surcharge').status).toBe('Possibly outdated')
   })
 })
