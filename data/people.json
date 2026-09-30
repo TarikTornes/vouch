@@ -1,9 +1,0 @@
-[
-  {"name": "Anna Peeters", "role": "BE payroll policy owner", "team": "Payroll Policy BE", "active": true, "answers": {"overtime_surcharge": 6, "meal_voucher": 3}},
-  {"name": "Pieter Claes", "role": "BE payroll specialist", "team": "Payroll Expertise BE", "active": true, "answers": {"overtime_surcharge": 9, "overtime_eligibility": 4, "mileage_allowance": 2}},
-  {"name": "Tom Maes", "role": "Payroll consultant (moved teams)", "team": "Implementation", "active": true, "answers": {"overtime_surcharge": 1}},
-  {"name": "Eva de Vries", "role": "NL payroll specialist", "team": "Payroll Expertise NL", "active": true, "answers": {}},
-  {"name": "Marc Dubois", "role": "Former travel & expenses owner", "team": "Payroll Policy BE", "active": false, "left": "2025-06", "answers": {}},
-  {"name": "Sophie Lambert", "role": "Payroll consultant", "team": "Client Service BE", "active": true, "answers": {}},
-  {"name": "Lotte Jacobs", "role": "Payroll operations", "team": "Operations", "active": true, "answers": {}}
-]
