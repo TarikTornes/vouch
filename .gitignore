@@ -5,3 +5,5 @@ __pycache__/
 data/resolutions.json
 data/questions_log.json
 .DS_Store
+data/*.db
+data/*.db-*

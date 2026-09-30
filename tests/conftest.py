@@ -43,10 +43,24 @@ def claim_id(kb, source_id, topic, condition="saturday"):
 
 @pytest.fixture
 def tmp_store(tmp_path, monkeypatch):
-    """Runtime JSON files go to a temp dir so tests never touch data/."""
-    monkeypatch.setattr(paths, "RESOLUTIONS", tmp_path / "resolutions.json")
-    monkeypatch.setattr(paths, "QUESTIONS_LOG", tmp_path / "questions_log.json")
+    """The SQLite DB goes to a temp dir so tests never touch data/."""
+    monkeypatch.setattr(paths, "DB", tmp_path / "test.db")
     return tmp_path
+
+
+TEST_PASSWORD = "correct-horse-battery-staple"
+
+
+@pytest.fixture
+def users(tmp_store):
+    from vouch.accounts import register
+    return {
+        "anna": register("anna", "Anna Peeters", TEST_PASSWORD, role="expert", person_name="Anna Peeters"),
+        "pieter": register("pieter", "Pieter Claes", TEST_PASSWORD, role="expert", person_name="Pieter Claes"),
+        "tom": register("tom", "Tom Maes", TEST_PASSWORD, role="consultant", person_name="Tom Maes"),
+        "sophie": register("sophie", "Sophie Lambert", TEST_PASSWORD),
+        "lotte": register("lotte", "Lotte Jacobs", TEST_PASSWORD, role="admin", person_name="Lotte Jacobs"),
+    }
 
 
 @pytest.fixture

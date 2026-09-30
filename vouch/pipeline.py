@@ -29,7 +29,8 @@ def headline(kv: KeyVerdict | None, kb: KB) -> str:
     return "🕓 The only source is outdated — verify before using."
 
 
-def answer(question: str, ctx: Context, kb: KB | None = None, *, use_llm: bool = True, log: bool = False) -> Answer:
+def answer(question: str, ctx: Context, kb: KB | None = None, *, use_llm: bool = True, log: bool = False,
+           user_id: int | None = None) -> Answer:
     kb = kb or store.load_kb()
     ctx.validate(kb.vocab)
     question = (question or "").strip()[:MAX_QUESTION]
@@ -49,7 +50,7 @@ def answer(question: str, ctx: Context, kb: KB | None = None, *, use_llm: bool =
         store.log_question({"question": question, "ctx": {"country": ctx.country, "client": ctx.client},
                             "topic": p["topic"], "condition": p["condition"],
                             "routed_to": expert["name"] if expert else None,
-                            "asked_at": dt.datetime.now().isoformat(timespec="seconds")})
+                            "asked_at": dt.datetime.now().isoformat(timespec="seconds")}, asked_by=user_id)
     return ans
 
 

@@ -6,7 +6,7 @@ from vouch import paths
 from vouch.models import CONFLICTING, POSSIBLY_OUTDATED, UNSUPPORTED, VERIFIED, Context
 from vouch.parse import keyword_parse
 from vouch.pipeline import answer
-from vouch.store import load_vocabulary
+from vouch.store import load_question_log, load_vocabulary
 from vouch.verdict import judge
 
 from conftest import claim_id
@@ -103,8 +103,8 @@ def test_public_holiday_unsupported(kb, tmp_store):
     assert ans.abstain is True
     assert ans.expert["name"] == "Pieter Claes"
     assert "won't guess" in ans.headline
-    log = json.loads(paths.QUESTIONS_LOG.read_text())
-    assert log[0]["question"] == q
+    log = load_question_log()
+    assert log[0]["question"] == q and log[0]["routed_to"] == "Pieter Claes"
 
 
 def test_pipeline_janssens_abstains_and_routes_to_anna(kb):

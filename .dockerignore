@@ -1,0 +1,11 @@
+.venv/
+.git/
+.env
+**/__pycache__/
+.pytest_cache/
+data/*.db
+data/*.db-*
+tests/
+*.md
+!README.md
+!eval/results.md

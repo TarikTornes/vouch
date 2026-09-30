@@ -1,4 +1,5 @@
-"""Fixed file locations. No path is ever derived from user input."""
+"""Fixed file locations. No path is ever derived from user input (VOUCH_DB_PATH is operator config)."""
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -9,8 +10,7 @@ VOCABULARY = CONFIG_DIR / "vocabulary.json"
 TRUST_RULES = CONFIG_DIR / "trust_rules.json"
 PEOPLE = DATA_DIR / "people.json"
 CLAIMS = DATA_DIR / "claims.json"
-RESOLUTIONS = DATA_DIR / "resolutions.json"
-QUESTIONS_LOG = DATA_DIR / "questions_log.json"
+DB = Path(os.getenv("VOUCH_DB_PATH", str(DATA_DIR / "vouch.db")))
 EVAL_DIR = ROOT / "eval"
 EVAL_RESULTS = EVAL_DIR / "results.json"
 EVAL_RESULTS_MD = EVAL_DIR / "results.md"

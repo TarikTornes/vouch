@@ -22,7 +22,7 @@ A plain RAG assistant blends them and confidently answers. **Vouch** instead:
 ## How it works
 
 ```
- corpus/*.md ──(local LLM, offline)──► claims.json ──┐          resolutions.json (expert overlay)
+ corpus/*.md ──(local LLM, offline)──► claims.json ──┐          SQLite: users, expert resolutions (overlay), gap log
    YAML front matter: type, owner,     verbatim-quote │                     │
    date, country, client, supersedes   checked claims ▼                     ▼
  question ─► parse (keywords → local LLM fallback) ─► (topic, condition) ─► judge() ─► templated answer
@@ -70,9 +70,10 @@ ollama pull qwen2.5:7b                      # free, ~4.7 GB; optional — the ap
 
 uv venv --python 3.12 && source .venv/bin/activate
 uv pip install -r requirements.txt
-cp .env.example .env                        # optionally set VOUCH_EXPERT_PIN
+cp .env.example .env                        # set VOUCH_DEMO_MODE=true and VOUCH_DEMO_PASSWORD for a demo
 
-streamlit run app.py                        # the app
+python -m vouch.accounts seed-demo          # demo accounts sophie / anna / pieter / lotte (password from .env)
+streamlit run app.py                        # the app — log in, or register a new consultant account
 pytest                                      # deterministic tests (fixture claims, no LLM)
 python -m vouch.extract                     # re-extract data/claims.json with the local LLM
 python eval/run_eval.py                     # plain RAG vs. Vouch -> eval/results.md
@@ -81,7 +82,7 @@ python eval/run_eval.py                     # plain RAG vs. Vouch -> eval/result
 ### Demo script (≈ 3 min)
 1. Consultant page, client **Janssens**, toggle **Plain RAG mode**, ask the Saturday-surcharge preset → a confident answer.
 2. Toggle it off → ⚠️ both sources with reasons, Dutch manual under *Ignored*, ✅ "Saturday counts as overtime (3 sources agree)", **Ask Anna**.
-3. **Expert** page as Anna → both sources side by side → pick 50%, note "agreement ended Jan 2026" → Resolve.
+3. Log out, log in as **anna** → **Expert** page → both sources side by side → pick 50%, note "agreement ended Jan 2026" → Resolve.
 4. Re-ask → ✅ 50%, confirmed by Anna Peeters; Teams message marked outdated.
 5. Public-holiday-on-Sunday preset → ❓ abstains, routes to Pieter, logged as a gap.
 6. **Knowledge health** and **Evaluation** pages. **🔄 Reset demo** in the sidebar restores the start state.
@@ -119,20 +120,32 @@ The document never says that, so the verbatim-quote check rejected it before it 
 - **Server-side authorization:** `experts.resolve_request` checks that the request exists and is open, that the
   resolver is the assigned expert, and that the chosen claim is one of that request's candidates — the UI is not trusted.
   Request IDs must be UUIDs and are only looked up in the store.
-- **Expert PIN** from the environment (`VOUCH_EXPERT_PIN`), compared with `hmac.compare_digest`.
-  This is demo-grade auth, not a real identity system (see *Unfinished*).
+- **Accounts & roles:** every page requires login. Passwords are salted **scrypt** hashes (stdlib), 12+ characters with a
+  weak-password check; login errors are generic (no user enumeration, constant-time path for unknown users);
+  **5 failed attempts lock the account for 15 minutes**; sessions expire after `VOUCH_SESSION_IDLE_MINUTES` idle.
+  Self-registration only ever creates **consultants** — expert/admin roles are granted by an admin (the admin
+  can't demote or disable themself). Pages are gated by role in the UI *and* every state change is re-checked on the
+  server: `resolve_request` re-reads the user from the database and requires an active expert whose profile is the
+  assigned expert. Only the user id is kept in the session, and it is re-validated on every request.
 - **LLM output is untrusted:** schema + enum validation, verbatim-quote check, value-in-quote check; the LLM never sets trust.
 - **Prompt injection:** document text is wrapped in `<document>` delimiters as data; the worst an injected document can do
   is propose claims that fail validation or that are still scored by fixed rules.
 - **Input limits:** question ≤ 300 chars, expert note ≤ 500 chars, country/client whitelisted from the vocabulary.
 - **Rendering:** no `unsafe_allow_html`; document, user and LLM text is escaped or rendered as plain text.
 - No `eval`/`exec`/`pickle`, no file upload, no user-controlled paths (all paths are constants in `vouch/paths.py`).
-- Atomic JSON writes (temp file + `os.replace`); pinned dependencies in `requirements.txt`; no secrets in git (`.env` is ignored).
+- **SQLite** (WAL mode) for all mutable state with parameterized queries only; resolving is a single guarded
+  `UPDATE … WHERE status = 'open'`, so a request can't be resolved twice. Pinned dependencies in `requirements.txt`;
+  no secrets in git (`.env` is ignored; demo passwords come from the environment).
+- **Deployment hardening** (see [DEPLOY.md](DEPLOY.md)): non-root container with read-only code, only `/data` writable,
+  `no-new-privileges`, all capabilities dropped, the model server not exposed, app bound to localhost behind a TLS
+  proxy; Streamlit XSRF protection on, error details and developer menu hidden.
 
 ## Project layout
 
 ```
-app.py                 Streamlit UI: Consultant · Expert · Knowledge health · Evaluation
+app.py                 Streamlit UI: Login/Register · Consultant · Expert · Knowledge health · Evaluation · Admin
+vouch/accounts.py      users, scrypt hashing, login lockout, roles; CLI: create-user / seed-demo / list
+vouch/db.py            SQLite schema + transactions (users, requests, gap log)
 vouch/ingest.py        corpus markdown + YAML front matter -> Doc
 vouch/extract.py       local-LLM claim extraction + validation (python -m vouch.extract)
 vouch/llm.py           Ollama wrapper; every failure returns None so callers fall back
@@ -151,7 +164,9 @@ tests/                 fixture-based tests for every verdict, the resolve loop a
 ## Unfinished / honest limitations
 
 - **Synthetic corpus** of 18 short fictional documents; every name is made up.
-- **Demo-grade auth:** persona selection + one shared PIN. A real deployment needs SSO and per-expert identity.
+- **Auth is self-contained:** username/password with roles and lockout, but no SSO, MFA, e-mail verification or
+  password-reset flow yet (an admin re-seeds a password via the CLI). Streamlit keeps the login per browser tab, so a
+  page refresh asks you to log in again.
 - Answers are composed from the vocabulary (5 topics × 5 conditions); questions outside it abstain rather than guess.
   Verifying a free-text LLM draft claim-by-claim ("Check this answer") is the next step.
 - Experts can resolve conflicts but not yet answer a knowledge gap directly (a gap needs a new document for now).

@@ -1,4 +1,5 @@
-"""JSON-file persistence. claims.json is immutable; expert resolutions are an overlay applied at load time."""
+"""Persistence. Corpus/claims/config are read-only files; expert requests and the gap log live in SQLite.
+claims.json is immutable; expert resolutions are an overlay applied at load time."""
 from __future__ import annotations
 
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 from .ingest import load_docs
 from .models import Claim, Doc
 from . import paths
+from .db import transaction
 
 
 def read_json(path: Path, default):
@@ -43,12 +45,19 @@ def load_people() -> list[dict]:
     return read_json(paths.PEOPLE, [])
 
 
-def load_requests() -> list[dict]:
-    return read_json(paths.RESOLUTIONS, [])
+def request_to_dict(row) -> dict:
+    d = dict(row)
+    d["ctx"] = {"country": d.pop("country"), "client": d.pop("client")}
+    d["candidate_claim_ids"] = json.loads(d["candidate_claim_ids"])
+    return d
 
 
-def save_requests(requests: list[dict]) -> None:
-    atomic_write_json(paths.RESOLUTIONS, requests)
+def load_requests(status: str | None = None) -> list[dict]:
+    sql, args = "SELECT * FROM requests", ()
+    if status:
+        sql, args = sql + " WHERE status = ?", (status,)
+    with transaction() as conn:
+        return [request_to_dict(r) for r in conn.execute(sql + " ORDER BY created_at", args)]
 
 
 def apply_overlay(claims: list[Claim], requests: list[dict]) -> list[Claim]:
@@ -80,19 +89,26 @@ def load_docs_by_id() -> dict[str, Doc]:
     return {d.id: d for d in load_docs()}
 
 
-def log_question(entry: dict) -> None:
-    log = read_json(paths.QUESTIONS_LOG, [])
-    log.append(entry)
-    atomic_write_json(paths.QUESTIONS_LOG, log)
+def log_question(entry: dict, asked_by: int | None = None) -> None:
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO questions_log (question, country, client, topic, condition, routed_to, asked_at, asked_by)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (entry["question"], entry["ctx"]["country"], entry["ctx"]["client"], entry.get("topic"),
+             entry.get("condition"), entry.get("routed_to"), entry["asked_at"], asked_by))
 
 
 def load_question_log() -> list[dict]:
-    return read_json(paths.QUESTIONS_LOG, [])
+    with transaction() as conn:
+        rows = conn.execute("SELECT * FROM questions_log ORDER BY asked_at").fetchall()
+    return [{**dict(r), "ctx": {"country": r["country"], "client": r["client"]}} for r in rows]
 
 
 def reset_demo() -> None:
-    for p in (paths.RESOLUTIONS, paths.QUESTIONS_LOG):
-        p.unlink(missing_ok=True)
+    """Clear expert requests and the gap log (users are kept)."""
+    with transaction() as conn:
+        conn.execute("DELETE FROM requests")
+        conn.execute("DELETE FROM questions_log")
 
 
 class KB:

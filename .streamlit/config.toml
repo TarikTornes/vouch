@@ -1,0 +1,13 @@
+[server]
+headless = true
+enableXsrfProtection = true
+enableCORS = true
+maxUploadSize = 1          # the app has no uploads
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "viewer"     # no developer menu for end users
+showErrorDetails = "none"  # never show stack traces to users

@@ -1,0 +1,34 @@
+# docker compose up -d --build
+# docker compose exec ollama ollama pull qwen2.5:7b      (once; ~4.7 GB, kept in the ollama volume)
+# docker compose exec vouch python -m vouch.accounts create-user --username admin --display-name "Admin" --role admin
+services:
+  vouch:
+    build: .
+    ports:
+      - "127.0.0.1:8501:8501"          # bind to localhost; expose publicly only through a TLS reverse proxy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      VOUCH_DB_PATH: /data/vouch.db
+    volumes:
+      - vouch-data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  ollama:
+    image: ollama/ollama:0.12.3
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    # no published port: only the vouch container talks to the model
+
+volumes:
+  vouch-data:
+  ollama-models:

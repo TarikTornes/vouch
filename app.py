@@ -1,18 +1,20 @@
-"""Vouch — Streamlit UI: Consultant | Expert | Knowledge health | Evaluation.
+"""Vouch — Streamlit UI: Login/Register | Consultant | Expert | Knowledge health | Evaluation | Admin.
 
-Security notes: no unsafe_allow_html anywhere; all document/user text is escaped before markdown rendering;
-authorization for resolving requests lives in vouch.experts.resolve_request (server side).
+Security notes: every page requires a logged-in user; pages are gated by role here AND every state change is
+re-authorized server side (vouch.experts.resolve_request, vouch.accounts.update_user). No unsafe_allow_html;
+all document/user text is escaped before markdown rendering. Only the user id lives in the session.
 """
 from __future__ import annotations
 
-import hmac
 import os
 import re
+import time
 
 import streamlit as st
 from dotenv import load_dotenv
 
 from vouch import llm, paths, store
+from vouch.accounts import ROLES, AuthError, User, authenticate, get_user, list_users, register, update_user
 from vouch.experts import create_request, open_requests_for, resolve_request
 from vouch.health import report
 from vouch.models import BADGES, CONFLICTING, POSSIBLY_OUTDATED, SOURCE_TYPE_LABELS, UNSUPPORTED, VERIFIED, Context
@@ -23,6 +25,10 @@ from vouch.verdict import judge
 
 load_dotenv()
 st.set_page_config(page_title="Vouch", page_icon="✅", layout="wide")
+
+ALLOW_REGISTRATION = os.getenv("VOUCH_ALLOW_REGISTRATION", "true").lower() == "true"
+DEMO_MODE = os.getenv("VOUCH_DEMO_MODE", "false").lower() == "true"
+IDLE_TIMEOUT_S = 60 * int(os.getenv("VOUCH_SESSION_IDLE_MINUTES", "60"))
 
 PRESETS = [
     "What overtime surcharge do we pay on Saturday hours?",
@@ -47,24 +53,97 @@ def kb():
     return store.load_kb()
 
 
-# ------------------------------------------------------------------------------------------------ sidebar
+# ------------------------------------------------------------------------------------------------ auth
 
 vocab = store.load_vocabulary()
 rules = store.load_rules()
 
+
+def current_user() -> User | None:
+    """Re-read the user on every run so deactivation / role changes apply immediately; enforce idle timeout."""
+    uid = st.session_state.get("uid")
+    if uid is None:
+        return None
+    user = get_user(uid)
+    now = time.time()
+    if user is None or not user.active or now - st.session_state.get("last_seen", 0) > IDLE_TIMEOUT_S:
+        st.session_state.clear()
+        st.session_state.auth_msg = "Your session ended. Please log in again."
+        return None
+    st.session_state.last_seen = now
+    return user
+
+
+def auth_page():
+    st.title("✅ Vouch")
+    st.caption("Search finds answers. Vouch tells you which ones you can act on — and when you can't, who to ask.")
+    if msg := st.session_state.pop("auth_msg", None):
+        st.info(msg)
+    left, _ = st.columns([1, 1])
+    with left:
+        login_tab, register_tab = st.tabs(["Log in", "Register"])
+        with login_tab, st.form("login"):
+            username = st.text_input("Username", max_chars=32, autocomplete="username")
+            password = st.text_input("Password", type="password", max_chars=128, autocomplete="current-password")
+            if st.form_submit_button("Log in", type="primary", width="stretch"):
+                try:
+                    user = authenticate(username, password)
+                except AuthError as err:
+                    st.error(str(err))
+                else:
+                    st.session_state.clear()                       # fresh session state on login
+                    st.session_state.uid, st.session_state.last_seen = user.id, time.time()
+                    st.rerun()
+        with register_tab:
+            if not ALLOW_REGISTRATION:
+                st.info("Self-registration is disabled. Ask an administrator for an account.")
+            else:
+                with st.form("register", clear_on_submit=False):
+                    st.caption("New accounts start as **consultant**. An admin can make you an expert.")
+                    name = st.text_input("Full name", max_chars=60)
+                    new_user = st.text_input("Username", max_chars=32, help="3–32 characters: a–z, 0–9, . _ -")
+                    pw1 = st.text_input("Password", type="password", max_chars=128, help="At least 12 characters",
+                                        autocomplete="new-password")
+                    pw2 = st.text_input("Repeat password", type="password", max_chars=128, autocomplete="new-password")
+                    if st.form_submit_button("Create account", width="stretch"):
+                        if pw1 != pw2:
+                            st.error("Passwords don't match.")
+                        else:
+                            try:
+                                u = register(new_user, name, pw1)
+                                st.success(f"Account **{esc(u.username)}** created — you can log in now.")
+                            except ValueError as err:
+                                st.error(str(err))
+        if DEMO_MODE:
+            st.caption("Demo accounts: **sophie** (consultant) · **anna**, **pieter** (experts) · **lotte** (admin).")
+
+
+user = current_user()
+if user is None:
+    auth_page()
+    st.stop()
+
+PAGES = ["Consultant"] + (["Expert", "Knowledge health"] if user.is_expert or user.is_admin else []) \
+    + ["Evaluation"] + (["Admin"] if user.is_admin else [])
+
 with st.sidebar:
     st.title("✅ Vouch")
     st.caption("Search finds answers. Vouch tells you which ones you can act on — and when you can't, who to ask.")
-    page = st.radio("Page", ["Consultant", "Expert", "Knowledge health", "Evaluation"], label_visibility="collapsed")
+    st.markdown(f"👤 **{esc(user.display_name)}** · {esc(user.role)}")
+    page = st.radio("Page", PAGES, label_visibility="collapsed")
+    if st.button("Log out", width="stretch"):
+        st.session_state.clear()
+        st.rerun()
     st.divider()
     st.caption(f"📅 Knowledge as of **{pretty_date(rules['as_of'])}**")
     if llm_status():
         st.caption(f"🟢 Local LLM running ({esc(llm.MODEL)} via Ollama)")
     else:
         st.caption("🟠 Local LLM offline — keyword parser + recorded plain-RAG runs")
-    if st.button("🔄 Reset demo", width="stretch"):
+    if DEMO_MODE and user.is_admin and st.button("🔄 Reset demo", width="stretch"):
         store.reset_demo()
-        st.session_state.clear()
+        for k in [k for k in st.session_state if k not in ("uid", "last_seen")]:
+            del st.session_state[k]
         st.rerun()
 
 
@@ -133,7 +212,7 @@ def preset_clicked(q: str):
 
 def consultant_page():
     st.header("Ask a payroll question")
-    st.caption("You are **Sophie Lambert**, payroll consultant. You just inherited Brouwerij Janssens.")
+    st.caption(f"Signed in as **{esc(user.display_name)}**. Pick the client's country and name, then ask.")
     c1, c2, c3 = st.columns([1, 1, 2])
     c1.selectbox("Country", vocab["countries"], key="country")
     c2.selectbox("Client", [c for c in vocab["clients"] if c != "all"] + ["all"], key="client")
@@ -167,7 +246,7 @@ def consultant_page():
         return
 
     k = kb()
-    ans = answer(last["question"], ctx, k, log=not st.session_state.get("logged", True))
+    ans = answer(last["question"], ctx, k, log=not st.session_state.get("logged", True), user_id=user.id)
     st.session_state.logged = True
     kv = ans.primary
     show = {VERIFIED: st.success, CONFLICTING: st.warning, POSSIBLY_OUTDATED: st.info}.get(
@@ -191,7 +270,7 @@ def consultant_page():
                           else "logged as a knowledge gap for them to fill."))
         elif kv and st.button(f"Ask {name.split()[0]}", type="primary"):
             try:
-                create_request(last["question"], ctx, kv, k)
+                create_request(last["question"], ctx, kv, k, created_by=user.id)
                 st.session_state[sent_key] = True
                 st.rerun()
             except ValueError as err:
@@ -201,21 +280,14 @@ def consultant_page():
 def expert_page():
     st.header("Expert inbox")
     k = kb()
-    active = [p["name"] for p in k.people if p.get("active")]
-    persona = st.selectbox("I am", active, index=active.index("Anna Peeters"))
-    pin = os.getenv("VOUCH_EXPERT_PIN", "")
-    if pin:
-        entered = st.text_input("PIN", type="password", max_chars=64)
-        if not hmac.compare_digest(entered.encode(), pin.encode()):
-            st.caption("Enter the expert PIN to see your requests.")
-            return
-    else:
-        st.caption("Demo mode: VOUCH_EXPERT_PIN is not set, so persona selection is not PIN-protected. "
-                   "Resolving is still checked server-side against the assigned expert.")
+    if not user.is_expert:
+        st.warning("Your account is not linked to an expert profile yet. Ask an admin to set it up.")
+        return
+    st.caption(f"Requests routed to **{esc(user.person_name)}**.")
 
     if st.session_state.pop("resolved_msg", False):
         st.success("Saved. The next person asking gets a verified answer.")
-    reqs = open_requests_for(persona)
+    reqs = open_requests_for(user)
     if not reqs:
         st.caption("No open requests. 🎉")
         return
@@ -249,7 +321,7 @@ def expert_page():
                                  placeholder="e.g. agreement ended Jan 2026")
             if st.button("Resolve", key=f"resolve_{r['id']}", type="primary"):
                 try:
-                    resolve_request(r["id"], persona, chosen, note)
+                    resolve_request(r["id"], user, chosen, note)
                     st.session_state.resolved_msg = True
                     st.rerun()
                 except (PermissionError, ValueError) as err:
@@ -278,5 +350,33 @@ def eval_page():
     st.markdown(paths.EVAL_RESULTS_MD.read_text(encoding="utf-8"))
 
 
-{"Consultant": consultant_page, "Expert": expert_page,
- "Knowledge health": health_page, "Evaluation": eval_page}[page]()
+def admin_page():
+    st.header("Users")
+    users = list_users()
+    st.dataframe([{"username": u.username, "name": u.display_name, "role": u.role,
+                   "expert profile": u.person_name or "", "active": u.active} for u in users],
+                 width="stretch", hide_index=True)
+    st.subheader("Change a user")
+    people = [""] + [p["name"] for p in store.load_people()]
+    by_name = {u.username: u for u in users}
+    with st.form("admin_user"):
+        target = by_name[st.selectbox("User", list(by_name))]
+        c1, c2, c3 = st.columns(3)
+        role = c1.selectbox("Role", ROLES, index=ROLES.index(target.role))
+        person = c2.selectbox("Expert profile (people directory)", people,
+                              index=people.index(target.person_name) if target.person_name in people else 0)
+        active = c3.checkbox("Active", value=target.active)
+        if st.form_submit_button("Save", type="primary"):
+            try:
+                update_user(user, target.id, role=role, active=active, person_name=person)
+                st.success(f"Saved {esc(target.username)}.")
+                st.rerun()
+            except (PermissionError, ValueError) as err:
+                st.error(f"Not allowed: {err}")
+
+
+if page not in PAGES:                                   # defense in depth: never render a page the role can't see
+    st.error("Not allowed.")
+    st.stop()
+{"Consultant": consultant_page, "Expert": expert_page, "Knowledge health": health_page,
+ "Evaluation": eval_page, "Admin": admin_page}[page]()
